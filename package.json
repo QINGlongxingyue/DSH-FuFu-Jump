@@ -1,0 +1,58 @@
+{
+  "name": "fufu-jump-dsh",
+  "version": "0.1.0",
+  "description": "DSH 桌面端界面插件：草地壁纸替换界面背景，两只鲸鱼娘挂件在草地上蹦跳（物理 / 拖动 / 台球式分裂 / 同类对消 / 挂机奖励）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "wallpaper",
+    "background",
+    "whale",
+    "widget",
+    "physics"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json",
+    "./assets/*": "./assets/*"
+  },
+  "files": [
+    "lib",
+    "src",
+    "assets",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "README-full.md",
+    "PROVENANCE.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild src/client.js --bundle --format=iife --target=chrome110 --legal-comments=none --outfile=lib/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QINGlongxingyue/DSH-FuFu-Jump.git"
+  },
+  "bugs": {
+    "url": "https://github.com/QINGlongxingyue/DSH-FuFu-Jump/issues"
+  },
+  "homepage": "https://github.com/QINGlongxingyue/DSH-FuFu-Jump#readme",
+  "license": "MIT"
+}

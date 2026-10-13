@@ -1,0 +1,63 @@
+# ============================================================================
+# dsh-whale-wallpaper —— DSH bundle patch
+# ============================================================================
+# 挂载声明。DSH 启动时按 bundle 层栈叠加各插件 patch，本文件把插件插进当前 profile。
+#
+# 安装（桌面端 profile 被 Electron 独占，dsh plugin 默认拒绝 --profile desktop）：
+#   正路：桌面端里「管理 dsh 命令…」注册官方 CLI，然后
+#         dsh plugin --profile desktop add <包名或 tgz>
+#   我用的野路子（已生效）：profile 目录里用自带 pnpm 装 link:，再手写 bundles
+#   改完必须**完全退出桌面端**（含托盘）再打开，profile 组合只在启动时收集一次。
+# ============================================================================
+
+- insert:
+    - id: dsh-whale-wallpaper
+      name: dsh-whale-wallpaper
+      config:
+        # 总开关：false = 完全不碰界面
+        enabled: true
+        # 壁纸铺满方式：cover（裁切铺满）/ contain（完整显示）/ fill（拉伸）
+        fit: cover
+        # 壁纸上方叠的一层颜色滤镜，用来压暗背景让文字更清楚
+        veil: "rgba(4, 18, 38, 0.18)"
+        # 让界面自己的底色透明，露出壁纸（false = 壁纸只在界面之外可见）
+        transparentUI: true
+        # 界面整体不透明度 / 饱和度，1 = 不处理
+        uiOpacity: 0.94
+        uiSaturate: 1.05
+        # 是否显示挂件、是否可以拖动
+        pets: true
+        draggable: true
+        # 每个挂件：
+        #   id      存档用的键（localStorage 里按它记住位置）
+        #   src     assets 里的文件名（.webp / .gif 都转好了，挑一个）
+        #   h       高度，视口高度的百分比
+        #   x/y     初始位置：角色**中心**在视口里的百分比
+        #   fill    宽度缩放百分比（100 = 原始比例）
+        #   mirror  水平翻转
+        #   alt     鼠标悬停提示
+        characters:
+          - id: bowl
+            src: whale-dance-1.webp
+            h: 28
+            x: 12
+            y: 80
+            fill: 100
+            mirror: false
+            alt: 鲸鱼娘·顶盆
+          - id: lace
+            src: whale-dance-2.webp
+            h: 26
+            x: 84
+            y: 78
+            fill: 100
+            mirror: false
+            alt: 鲸鱼娘·蕾丝
+        # 界面后面透出的壁纸亮度，1 = 原图
+        brightness: 1
+        # 背景模糊半径（px），0 = 不模糊
+        blur: 0
+        # ⚠️ 物理参数（重力/弹跳/上下边界/数量上限…）不写在这里：
+        #    它们存在 $DSH_HOME/.dshw-wallpaper-settings.json，
+        #    在界面右下角「设置」面板里改，改完点保存 + 硬刷新页面即可。
+        #    原因：注入行对桌面端是「启动时收集一次」的快照，写在这里改了不生效。
