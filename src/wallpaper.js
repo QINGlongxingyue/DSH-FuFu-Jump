@@ -130,11 +130,11 @@ function clearTier(level) {
 /** 界面透明化：把 DSH 自己的底色让开，壁纸才能透出来。 */
 const UI_TRANSPARENT_CSS = `
 html, body { background-color: transparent !important; }
-#root, #root > div { background-color: transparent !important; }
+#root { background-color: transparent !important; }
 /* ⚠️ 最后一道保险：凡是**自己带底色、而且铺满视野**的界面容器，一律清成透明。
    为什么需要它：DSH 的应用外壳（AppFrame）自己带 background: var(--dsw-alias-bg-base)，
-   它比 #root 深一层，只清 #root 盖不住 —— 症状就是「壁纸明明加载成功（自检里 complete:true）
-   但屏幕上一点都看不见」。这个规则由 fixOpaqueAppLayers() 打标记，只作用于被判定出来的元素。 */
+   只清 #root 盖不住 —— 症状就是「壁纸明明加载成功（自检里 complete:true）但屏幕上一点都看不见」。
+   这个规则由 fixOpaqueAppLayers() 打标记；DSH 自己的弹窗/设置面板会被排除在外（见 markOverlaysKeepOpaque）。 */
 [data-dshww-clear-bg="1"] { background-color: transparent !important; }
 /* 有些容器是「底色 + 一层渐变/图」叠出来的，只清底色还会剩一层白 */
 [data-dshww-clear-bgi="1"] { background-image: none !important; }
@@ -272,6 +272,81 @@ function watchIdle(engine) {
 }
 
 /**
+ * 给「DSH 自己的弹窗 / 设置面板 / 插件管理」打标记：
+ * `fixOpaqueAppLayers()` 会跳过这些元素及其后代 —— 不然把面板底也清成透明，
+ * 设置里的插件列表就糊在壁纸上、字都看不清了。
+ *
+ * 为什么不用写死类名：DSH 的样式类带构建期 hash（`_dialog_o6lrb_33`），
+ * 每次发版都会变。这里按**功能特征**认：
+ *   ① `[role="dialog"]` / `[aria-modal]` —— 标准无障碍标记，最可靠
+ *   ② 屏幕级遮罩：铺满视口 + 有 `backdrop-filter`（DSH 的 mask 就是 `inset:0` + 模糊）
+ */
+const KEEP_OPAQUE_ATTR = 'data-dshww-keep-opaque'
+
+function markOverlaysKeepOpaque() {
+  const marked = []
+  try {
+    const doc = document
+    const css = globalThis.getComputedStyle
+    if (typeof css !== 'function') return marked
+    const vw = globalThis.innerWidth || doc.documentElement.clientWidth || 1
+    const vh = globalThis.innerHeight || doc.documentElement.clientHeight || 1
+
+    const nodes = []
+    const collect = (node) => {
+      if (!node) return
+      nodes.push(node)
+      if (typeof node.querySelectorAll === 'function') {
+        for (const n of node.querySelectorAll('*')) nodes.push(n)
+      } else {
+        for (const c of node.children || []) collect(c)
+      }
+    }
+    collect(doc.body || doc.documentElement)
+
+    for (const node of nodes) {
+      if (!node || typeof node.getAttribute !== 'function') continue
+      if (node.getAttribute(KEEP_OPAQUE_ATTR) === '1') continue
+      let keep = false
+      try {
+        if (node.getAttribute('role') === 'dialog') keep = true
+        if (node.getAttribute('aria-modal') === 'true') keep = true
+      } catch (err) {}
+      if (!keep) {
+        try {
+          const cs = css(node)
+          const bf = String((cs && (cs.backdropFilter || cs.webkitBackdropFilter)) || 'none')
+          if (bf && bf !== 'none') {
+            const r = node.getBoundingClientRect()
+            // 屏幕级遮罩：铺满 ≥90% 视口
+            if (r.width * r.height >= vw * vh * 0.9) keep = true
+          }
+        } catch (err) {}
+      }
+      if (!keep) continue
+      node.setAttribute(KEEP_OPAQUE_ATTR, '1')
+      marked.push((node.id ? '#' + node.id : String(node.tagName || '?').toLowerCase())
+        + (node.className ? '.' + String(node.className).split(/\s+/).slice(0, 2).join('.') : ''))
+    }
+  } catch (err) {}
+  return marked
+}
+
+/** 这个节点是不是「要保持不透明」的弹窗/设置面板（自己或被祖先标记过）。 */
+function insideKeptOverlay(node) {
+  try {
+    let n = node
+    let depth = 0
+    while (n && depth < 20) {
+      if (typeof n.getAttribute === 'function' && n.getAttribute(KEEP_OPAQUE_ATTR) === '1') return true
+      n = n.parentNode
+      depth += 1
+    }
+  } catch (err) {}
+  return false
+}
+
+/**
  * 把「会把壁纸糊掉的界面底色」清成透明，返回被处理的元素描述（给自检回传）。
  *
  * 为什么需要它：DSH 的外壳和各个面板自己都带底色 —— AppFrame 是
@@ -316,6 +391,8 @@ function fixOpaqueAppLayers() {
       }
     }
     collect(doc.body || doc.documentElement)
+    // 先把「DSH 自己的弹窗/设置面板」标记出来，下面遇到就跳过
+    markOverlaysKeepOpaque()
 
     /** 解析 'rgba(r, g, b, a)' / 'rgb(...)' 的 alpha；不确定就当成 1（保守：宁可清）。 */
     const alphaOf = (bg) => {
@@ -353,6 +430,8 @@ function fixOpaqueAppLayers() {
       if (!node || node.id === LAYER_ID || node.id === PETS_ID) continue
       if (typeof node.closest === 'function'
         && (node.closest('#' + LAYER_ID) || node.closest('#' + PETS_ID))) continue
+      // ⚠️ DSH 自己的弹窗/设置面板要保持不透明，不然设置里的插件列表糊在壁纸上、字都看不见
+      if (insideKeptOverlay(node)) continue
       let cs = null
       try { cs = css(node) } catch (err) { continue }
       if (!cs) continue
@@ -455,6 +534,18 @@ function createEngine(state) {
   let nextEliminateAt = 0
   // 分裂暂停到这一刻为止（数量一到上限就设，默认停 2 分钟）
   let splitPausedUntil = 0
+  /**
+   * 环形调试日志：玩法分支（分裂/对消/暂停/挂机）的关键决策都记一笔。
+   * 排「为什么没触发」这种问题时，靠它比反复插临时 console.log 强得多。
+   * 通过 `api.debugLog()` 读，或 `api.debugLogClear()` 清空。
+   */
+  const log = []
+  const pushLog = (tag, extra) => {
+    try {
+      log.push(Object.assign({ t: Math.round(simTime), tag }, extra || {}))
+      if (log.length > 200) log.shift()
+    } catch (err) {}
+  }
 
   const vw = () => globalThis.innerWidth || document.documentElement.clientWidth || 1
   const vh = () => globalThis.innerHeight || document.documentElement.clientHeight || 1
@@ -759,6 +850,7 @@ function createEngine(state) {
           // 被撞的这一对也各记一份冷却，免得它们俩黏在一起反复触发
           pet.splitCd = P.splitCooldown
           other.splitCd = P.splitCooldown
+          pushLog('split', { from: pets.length, to: pets.length + 2 })
           trySplit(pet, other, nx, ny)
         }
       }
@@ -773,11 +865,14 @@ function createEngine(state) {
         nextEliminateAt = simTime + P.eliminateDelay * 1000
         // 一到上限就停分裂：停 P.splitPause 秒（默认 2 分钟）
         splitPausedUntil = simTime + P.splitPause * 1000
+        pushLog('cap-reached', { n: pets.length, pauseS: P.splitPause, delayS: P.eliminateDelay })
       } else if (simTime >= nextEliminateAt) {
         if (tryEliminate() > 0) {
+          pushLog('eliminate', { n: pets.length })
           // 空出名额了；下次对消再过 eliminateInterval 秒
           nextEliminateAt = simTime + P.eliminateInterval * 1000
         } else {
+          pushLog('eliminate-skip', { n: pets.length, nextIn: 200 })
           // 没有同类可消：退一步继续等，别每帧都算一遍
           nextEliminateAt = simTime + 200
         }
@@ -913,6 +1008,26 @@ function createEngine(state) {
     releaseSplitPause: () => { splitPausedUntil = 0; return true },
     /** 分裂暂停的剩余秒数（自检/测试用）。 */
     splitPauseLeft: () => Math.max(0, (splitPausedUntil - simTime) / 1000),
+    /**
+     * 把模拟状态清干净并重新播下种子挂件（自检/测试用）。
+     *
+     * 为什么需要：分裂/对消/暂停这些玩法会改 `simTime`、`fullSince`、`splitPausedUntil`
+     * 和挂件数量，用例之间会互相污染（测试飘过好几次，全是这个原因）。
+     * 有了它，每个用例都能从确定的初始状态起跑。
+     */
+    debugReset: () => {
+      clear()
+      simTime = 0
+      saveAt = 0
+      last = 0
+      log.length = 0
+      seed()
+      updateCount()
+      return pets.length
+    },
+    /** 环形调试日志（自检/测试用）。 */
+    debugLog: () => log.slice(),
+    debugLogClear: () => { log.length = 0; return true },
     /** 挂机奖励：随便落一只新的（已经到上限就不加）。 */
     spawnIdle: () => {
       try {
@@ -1413,6 +1528,12 @@ function mount(config) {
     debugReleaseSplitPause: () => engine.releaseSplitPause(),
     /** 给自检用：读分裂暂停的剩余秒数（0 表示已解除）。 */
     debugSplitPauseLeft: () => engine.splitPauseLeft(),
+    /** 给自检用：清干净模拟状态并重新播种（每个用例从确定状态起跑）。 */
+    debugReset: () => engine.debugReset(),
+    /** 给自检用：读环形调试日志（玩法分支的关键决策）。 */
+    debugLog: () => engine.debugLog(),
+    /** 给自检用：清空调试日志。 */
+    debugLogClear: () => engine.debugLogClear(),
     dispose: () => {
       engine.stop()
       removeEl(BAR_ID)
@@ -1645,6 +1766,7 @@ function reportDiag(base) {
                 bg,
                 bgImage: bi === 'none' ? 'none' : bi.slice(0, 60),
                 cleared: node.getAttribute('data-dshww-clear-bg') === '1',
+                keepOpaque: node.getAttribute('data-dshww-keep-opaque') === '1',
                 opacity: cs.opacity,
                 z: cs.zIndex,
               })

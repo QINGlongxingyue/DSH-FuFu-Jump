@@ -48,15 +48,21 @@ const api = async (method, url, body) => {
       const text = await res.text()
       let json = null
       try { json = text ? JSON.parse(text) : null } catch (err) { /* 非 JSON 响应 */ }
+      // 5xx 是服务端临时错误（传大素材时偶发 502），重试；4xx 是我们的问题，交回调用方报错
+      if (res.status >= 500 && attempt < 4) {
+        console.log(`  ${method} ${url} -> HTTP ${res.status}，重试…`)
+        await new Promise((r) => setTimeout(r, 2000 * attempt))
+        continue
+      }
       return { status: res.status, ok: res.ok, json, text }
     } catch (err) {
       lastErr = err
       const why = err.cause ? err.cause.message : err.message
       console.log(`  ${method} ${url} 第 ${attempt} 次失败：${why}`)
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 1500 * attempt))
+      if (attempt < 4) await new Promise((r) => setTimeout(r, 1500 * attempt))
     }
   }
-  console.error(`请求失败（重试 3 次）：${lastErr && (lastErr.cause ? lastErr.cause.message : lastErr.message)}`)
+  console.error(`请求失败（重试 4 次）：${lastErr && (lastErr.cause ? lastErr.cause.message : lastErr.message)}`)
   process.exit(1)
 }
 
