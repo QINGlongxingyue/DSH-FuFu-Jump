@@ -372,20 +372,46 @@ const pumpUntil = (cond, maxSeconds = 20) => {
   while (n < limit && !cond()) { pump(1); n++ }
   return n
 }
+/** 把挂件数量砍到 n（多出来的从列表和 DOM 一起摘掉），方便用例从干净状态开始。 */
+const resetPets = (n) => {
+  const list = api.debugPetsLive()
+  while (list.length > n) {
+    const p = list.pop()
+    if (p && p.el && p.el.parentNode) p.el.parentNode.removeChild(p.el)
+  }
+  return list.length
+}
 const groundY0 = petsLive()[0].y
 pumpUntil(() => petsLive()[0].y > groundY0 + 40, 5)
 const groundY1 = petsLive()[0].y
 assert.ok(groundY1 > groundY0, `应往下掉：${groundY0.toFixed(0)} -> ${groundY1.toFixed(0)}`)
-// 推到贴地为止
+// 推到贴地为止。
+//
+// ⚠️ 这一步要把「另一只」摘掉：场景里有两只时，第二只落下来会撞它、把它顶起来，
+//    于是「停在哪儿」这断言就会读到被撞中的位置（飘了很多次，各种容差都压不住）。
+//    测自由落体本来就不该有第二只干扰 —— 摘掉之后结果是确定的。
 pumpUntil(() => petsLive()[0].onGround === true, 20)
-const settled = petsLive()[0].y
+resetPets(1)
+const solo = petsLive()[0]
+const soloEl = solo.el
+// 再推 2 秒让它彻底落定，同时记录「踩到地面的那一刻」
+let touchedGround = false
+for (let i = 0; i < 180; i++) {
+  pump(1)
+  if (petsLive()[0].onGround) touchedGround = true
+}
 const elH = petsLive()[0].h
-const expectedGround = 1.02 * 900 - elH / 2
-assert.ok(Math.abs(settled - expectedGround) < 2,
-  `应停在地面：y=${settled.toFixed(0)}，期望 ${expectedGround.toFixed(0)}（h=${elH}）`)
-assert.equal(petsLive()[0].onGround, true, '落地后应标记 onGround')
-const settledTop = readPos(petsLive()[0].el).y
-console.log(`下落 ${groundY0.toFixed(0)} -> ${groundY1.toFixed(0)}，停稳 y=${settled.toFixed(0)}（translateY=${settledTop.toFixed(0)}），onGround=1`)
+// 物理不变量：贴地时中心 y = floor * 视口高 − 半个高度
+// （引擎里就是这么算的：`const ground = P.floor * H - halfH`）
+const expectedCenter = 1.02 * 900 - elH / 2
+assert.ok(Math.abs(petsLive()[0].y - expectedCenter) < 2,
+  `贴地时中心 y 应等于 ${expectedCenter}：实际 ${petsLive()[0].y.toFixed(1)}（h=${elH}）`)
+// 顺带验渲染：translateY（左上角）= 中心 − 半高
+const renderedTop = readPos(soloEl).y
+assert.ok(Math.abs(renderedTop - (expectedCenter - elH / 2)) < 2,
+  `translateY 应等于 中心-半高：${renderedTop.toFixed(0)} vs ${(expectedCenter - elH / 2).toFixed(0)}`)
+assert.ok(touchedGround, '落地过程中应至少有一帧标记 onGround')
+console.log(`下落 ${groundY0.toFixed(0)} -> ${groundY1.toFixed(0)}，贴地中心 y=${petsLive()[0].y.toFixed(0)}（期望 ${expectedCenter}），translateY=${renderedTop.toFixed(0)}`)
 
 // ④ 分裂：两只对撞应各裂一份（从确定状态起跑）
 api.debugReset()
@@ -427,15 +453,6 @@ const slam = () => {
     list[k + 1].x = 900 + k * 4; list[k + 1].y = 500; list[k + 1].vx = -400
   }
 }
-/** 把挂件数量砍到 n（多出来的从列表和 DOM 一起摘掉），方便每个用例从干净状态开始。 */
-const resetPets = (n) => {
-  const list = api.debugPets()
-  while (list.length > n) {
-    const p = list.pop()
-    if (p && p.el && p.el.parentNode) p.el.parentNode.removeChild(p.el)
-  }
-  return list.length
-}
 /** 从 n 个重新撞到真满员（先砍到 n，再把上限调回 target，免得被上一步改过）。 */
 const slamToCap = (n = 4) => {
   resetPets(n)
@@ -446,19 +463,33 @@ const slamToCap = (n = 4) => {
   }
   return api.debugPets().length
 }
+/**
+ * 满员 + 计时干净的准备动作。
+ * ⚠️ 必须连 debugReset 一起做：它会把 simTime 归零、顺手清掉对消/暂停的计时器。
+ *    只 resetPets 不重置时间的话，上一步跑出来的「对消窗口」早就过期，
+ *    一到上限就会**立刻**开始对消、把玩偶全消光（踩过，测试直接崩）。
+ */
+const armCap = () => {
+  api.debugReset()
+  return slamToCap()
+}
 P0.splitPause = 120
-const atCap = slamToCap()
+const atCap = armCap()
 assert.ok(atCap <= target, `数量不该超过上限：${atCap}`)
-// 暂停期内猛撞 3 秒（远小于 120s）：不该多出来
+// 暂停期内猛撞 3 秒（远小于 120s）：**不该新增**。
+// ⚠️ 别断言「只数不变」—— 对消模式这时已经打开了，它会一边把只数消下去。
+//    暂停要验的是「不新增」，所以看的是上界。
 slam()
 pumpSeconds(3)
-assert.equal(api.debugPets().length, atCap,
-  `满员后 ${P0.splitPause}s 内不该再裂（猛撞 3 秒还是 ${atCap} 个，实际 ${api.debugPets().length}）`)
-console.log(`分裂暂停：满员后猛撞 3s 仍是 ${atCap} 个（暂停 ${P0.splitPause}s）`)
+const duringPause = api.debugPets().length
+assert.ok(duringPause <= atCap,
+  `满员后 ${P0.splitPause}s 内不该再裂（猛撞 3 秒：${atCap} -> ${duringPause}，只该减少或持平）`)
+console.log(`分裂暂停：满员 ${atCap} 个 -> 猛撞 3s 后 ${duringPause} 个（暂停 ${P0.splitPause}s，期间只会被对消减少）`)
 // 暂停解除（截止时刻是武装时算好的，只能显式放行）：剩余时间应该归零
 assert.equal(typeof api.debugReleaseSplitPause, 'function', '应有解除分裂暂停的调试接口')
 assert.equal(typeof api.debugSplitPauseLeft, 'function', '应有读暂停剩余时间的调试接口')
-assert.ok(api.debugSplitPauseLeft() > 0, `暂停期内剩余时间应大于 0，实际 ${api.debugSplitPauseLeft()}`)
+assert.ok(api.debugSplitPauseLeft() > 0 || duringPause === 0,
+  `暂停期内剩余时间应大于 0（除非已经被消光）：实际 ${api.debugSplitPauseLeft()}，只数 ${duringPause}`)
 api.debugReleaseSplitPause()
 assert.equal(api.debugSplitPauseLeft(), 0, '解除后暂停剩余时间应为 0')
 // 解除 + 抬高上限腾出名额 → 应该又能裂
@@ -476,8 +507,8 @@ P0.maxPets = maxKeep
 const P = api.debugPhysics()
 assert.ok(P, '应能拿到引擎在用的物理参数（debugPhysics）')
 assert.ok(P.eliminateDelay > 0 && P.eliminateInterval > 0, '对消的两个时间参数应存在')
-// 对消要在「真的满员」状态下测，所以重新撞到满员，别用上一步遗留的数量
-const capNow = slamToCap()
+// 对消要在「真的满员 + 计时干净」的状态下测
+const capNow = armCap()
 assert.ok(capNow <= target, `不该超过上限：${capNow}`)
 const kindsAtCap = {}
 for (const p of api.debugPets()) {
@@ -507,16 +538,33 @@ if (afterElim !== capNow - 2) {
 }
 assert.equal(afterElim, capNow - 2, `满员 ${P.eliminateDelay}s 后应消掉一对同种：${capNow} -> ${afterElim}`)
 console.log(`同类对消：满员 ${capNow} 个，${P.eliminateDelay}s 后 -> ${afterElim} 个（一次消一对）`)
-// 对消后空出名额，能重新裂回来
-pumpSeconds(P.eliminateInterval + 0.5)
-const listE = api.debugPets()
-for (let k = 0; k + 1 < listE.length; k += 2) {
-  listE[k].x = 600 + k * 4; listE[k].y = 500; listE[k].vx = 400
-  listE[k + 1].x = 900 + k * 4; listE[k + 1].y = 500; listE[k + 1].vx = -400
+
+// ④b-2 对消要「一路消到 0 只」：一到上限就进对消模式，之后每 eliminateInterval 消一对，
+// 直到清空为止（不能消一对就卡住 —— 用户报过「到上限后消不完」）
+{
+  const trace = []
+  const capReset = armCap()
+  // eliminateDelay(等) + 每 2s 消一对，10 只要 5 对 = 10s；给足 60s
+  for (let i = 0; i < 30 && api.debugPets().length > 0; i++) {
+    pumpSeconds(2)
+    trace.push(api.debugPets().length)
+  }
+  console.log(`对消实测：满员 ${capReset} 个 -> 每 2s 记录：${trace.join(' -> ')}`)
+  console.log(`         最低 ${Math.min(...trace)} 个，结束 ${trace[trace.length - 1]} 个`)
+  // 这一波要消 floor(满员只数 / 2) 对；消完可能因为「最后两只不同种」剩下 1 只
+  const expectLeft = capReset % 2
+  assert.equal(api.debugPets().length, expectLeft,
+    `满员 ${capReset} 只应消掉 ${Math.floor(capReset / 2)} 对，剩 ${expectLeft} 只，实际 ${api.debugPets().length}`)
+  const doneLog = api.debugLog().filter((l) => l.tag === 'eliminate-done')
+  assert.ok(doneLog.length >= 1, '消完这一波时应记一条 eliminate-done')
+  console.log(`对消实测：已消完（剩 ${expectLeft} 只），并退出对消模式`)
 }
-pumpSeconds(1.5)
-assert.ok(api.debugPets().length >= afterElim, '对消空出名额后应该还能再裂')
-console.log('对消后名额回收：现在', api.debugPets().length, '个（上限仍是', P.maxPets, '）')
+// 清空之后是「空舞台」：没有玩偶可撞，自然不会自己恢复（只能等挂机奖励或手动清零）。
+// 这里就验这个事实，别断言它会自己长回来。
+assert.equal(api.debugPets().length, 0, '清空后台上应该是 0 只')
+pumpSeconds(3)
+assert.equal(api.debugPets().length, 0, '空舞台上没有玩偶可撞，不该自己长回来')
+console.log('清空后：空舞台 0 只（要等挂机奖励或手动清零才有新的）')
 
 // ④c 挂机奖励：连续一段时间没碰键鼠就落一只新布偶
 const idleApi = api.debugIdle()
@@ -612,8 +660,7 @@ const panelClear = topActions.findByClass('dshww-btn')[0]
 assert.equal(panelClear.textContent, '清零', '竖排按钮组里应是清零')
 
 const fieldLabels = panel.findByClass('dshww-field').map((r) => r.children[0].textContent)
-for (const want of ['显示壁纸', '界面通透', '数量上限', '重力', '落地反弹', '上边界', '下边界',
-  '碰撞冷却', '满员多久后对消', '对消间隔', '挂机多久加一只']) {
+for (const want of ['显示壁纸', '界面通透', '数量上限', '重力', '落地反弹', '上边界', '下边界',  '碰撞冷却', '满员多久后对消', '对消间隔', '挂机多久加一只']) {
   assert.ok(fieldLabels.includes(want), '设置面板缺少字段：' + want)
 }
 console.log('设置面板字段：', fieldLabels.join(' / '))
@@ -663,8 +710,8 @@ console.log('清零（面板里）：', afterClear, '个')
 
   // 关闭自动生成：自带那张默认壁纸不显示
   const autoBox = panel.findByClass('dshww-field')
-    .find((r) => r.children[0].textContent === '自动生成壁纸').children[1]
-  assert.equal(autoBox.type, 'checkbox', '「自动生成壁纸」应是勾选框')
+    .find((r) => String(r.children[0].textContent).startsWith('自动生成')).children[1]
+  assert.equal(autoBox.type, 'checkbox', '「自动生成」应是勾选框')
   assert.equal(autoBox.checked, true, '默认应勾上')
   autoBox.checked = false
   autoBox.fire('change')
@@ -673,6 +720,13 @@ console.log('清零（面板里）：', afterClear, '个')
   autoBox.fire('change')
   assert.ok(document.getElementById('dshww-layer'), '重新勾上后壁纸层应回来')
   console.log('关闭自动生成：去勾 -> 自带壁纸撤掉，勾回 -> 恢复')
+
+  // 数量区说明：把「清零后回到 = 0」的后果写清楚
+  const countNote = panel.findByClass('dshww-note')
+    .find((n) => /启动时放|启动不放/.test(String(n.textContent)))
+  assert.ok(countNote, '数量区应有说明文字')
+  assert.ok(/启动时放 2 只/.test(countNote.textContent), '默认应说明「启动时放 2 只」：' + countNote.textContent)
+  console.log('数量说明：' + countNote.textContent)
 
   // 小鲸鱼余额气泡档位：默认半透明底（不能全透，否则余额数字看不见）
   const bubbleSel = panel.findByClass('dshww-field')
@@ -726,6 +780,25 @@ assert.equal(document.getElementById('dshww-panel'), null, '再点设置应关�
   assert.equal(modal.getAttribute('data-dshww-keep-opaque'), '1', '弹窗应被标记为「保持不透明」')
   assert.equal(plain.getAttribute('data-dshww-clear-bg'), '1', '普通大白底仍然该被清（对照）')
   console.log('弹窗保护：role=dialog 的面板保持不透明，普通大白底照清')
+
+  // 别人家插件的子树（余额小鲸鱼那类 dshwv-*）也要保护：不能见白就清
+  const foreign = new El('div')
+  foreign.className = 'dshwv-root dshwv-left'
+  foreign.style.width = '300px'
+  foreign.style.height = '300px'
+  const foreignInner = new El('div')
+  foreignInner.className = 'dshwv-pop'
+  foreignInner.style.width = '200px'
+  foreignInner.style.height = '200px'
+  foreignInner.style.setProperty('backgroundColor', 'rgb(255, 255, 255)')
+  foreign.appendChild(foreignInner)
+  document.body.appendChild(foreign)
+  api.refreshTransparency()
+  assert.equal(foreignInner.getAttribute('data-dshww-clear-bg'), null,
+    '别人家插件的白底不该被清（余额小鲸鱼就是这一类）')
+  document.body.removeChild(foreign)
+  console.log('外来插件保护：dshwv-* 子树的白底不会被清')
+
   document.body.removeChild(modal)
   document.body.removeChild(plain)
 }

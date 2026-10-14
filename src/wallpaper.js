@@ -312,6 +312,32 @@ function watchIdle(engine) {
  */
 const KEEP_OPAQUE_ATTR = 'data-dshww-keep-opaque'
 
+/** 已知的第三方插件 class 前缀（别人做的插件，界面别去动）。 */
+const FOREIGN_PREFIXES = ['dshwv-', 'dshw-', 'dsh-whale-', 'dshww-']
+
+/**
+ * 这个节点是不是「别人家插件的根」。
+ *
+ * DSH 自己的样式类带构建期 hash，形态是：
+ *   `_2H3hWW_root`、`BynINW_frame`、`_block_7gxqk_4`、`cJsG2q_bubble`
+ *   —— 也就是 `_名字_hash_数字` 或 `名字_hash_数字`。
+ * 第三方插件则自带一套稳定前缀（小鲸鱼是 `dshwv-`）。
+ * 判据：第一个 class 命中已知外来前缀，且**整串不满足 DSH 的 hash 形态**。
+ */
+function isForeignRoot(node) {
+  try {
+    const cls = String(node.className || '')
+    if (!cls) return false
+    const names = cls.split(/\s+/).filter(Boolean)
+    if (!names.length) return false
+    const hasForeign = names.some((n) => FOREIGN_PREFIXES.some((p) => n.startsWith(p)))
+    if (!hasForeign) return false
+    // DSH 那套是「前缀_hash_数字」，带下划线 + 尾数字；外来的是连字符命名
+    const looksDsh = names.some((n) => /^_?[\w-]+_[0-9a-z]{4,}_\d+$/i.test(n))
+    return !looksDsh
+  } catch (err) { return false }
+}
+
 function markOverlaysKeepOpaque() {
   const marked = []
   try {
@@ -350,6 +376,16 @@ function markOverlaysKeepOpaque() {
             // 屏幕级遮罩：铺满 ≥90% 视口
             if (r.width * r.height >= vw * vh * 0.9) keep = true
           }
+        } catch (err) {}
+      }
+      // ③ 别人家的界面：认「自带 class 命名空间、又不是 DSH 自己那套」的根节点，整棵子树保护起来。
+      //    为什么：用户反馈过「通透会波及另一个插件（余额小鲸鱼）」——
+      //    那些插件自带一整套 class 前缀（小鲸鱼是 dshwv-），它们的配色/底色是设计的一部分，
+      //    见白就清会把人家搞坏。DSH 自己的 class 带构建 hash（_xxx_hash_NN / Xxxx_yyy_NN），
+      //    用这个特征把它们区分开。
+      if (!keep) {
+        try {
+          keep = isForeignRoot(node)
         } catch (err) {}
       }
       if (!keep) continue
@@ -464,6 +500,23 @@ function fixOpaqueAppLayers() {
       let cs = null
       try { cs = css(node) } catch (err) { continue }
       if (!cs) continue
+      // ① 别人家插件的子树：一律不动（见 isForeignRoot 上面那段注释）
+      if (isForeignRoot(node)) continue
+      if (typeof node.closest === 'function') {
+        let foreign = false
+        try {
+          for (const p of FOREIGN_PREFIXES) {
+            if (node.closest(`[class*="${p}"]`)) { foreign = true; break }
+          }
+        } catch (err) {}
+        if (foreign) continue
+      }
+      // ② 用了背景模糊的元素：那是刻意的毛玻璃设计（DSH 的侧栏/工具条就靠它出质感），
+      //    清了底色就没质感了。这类跳过，只清纯色底。
+      try {
+        const bf = String(cs.backdropFilter || cs.webkitBackdropFilter || 'none')
+        if (bf && bf !== 'none') continue
+      } catch (err) {}
       const bg = String(cs.backgroundColor || '')
       const bi = String(cs.backgroundImage || 'none')
       const solidBg = alphaOf(bg) > tier.alpha
@@ -605,6 +658,17 @@ function createEngine(state) {
   // 分裂暂停到这一刻为止（数量一到上限就设，默认停 2 分钟）
   let splitPausedUntil = 0
   /**
+   * 对消模式开关：一到达上限就打开，然后**一直消到 0 只为止**。
+   *
+   * ⚠️ 别把对消挂在「当前只数 ≥ 上限」这个条件上 —— 消掉一对之后只数就掉到上限以下了，
+   *    条件不成立 → 对消立刻停、状态被清空；而分裂又被暂停锁着、数量回不上去，
+   *    结果就是「消一对就卡住不动」（实测：满员 10 → 8 → 一直停在 8）。
+   *    所以用这个独立标志：满了打开，消到 0 才关。
+   */
+  let eliminating = false
+  /** 这一波还要消几对（进入对消模式时按当时只数算好，防止最后剩两只不同种卡死）。 */
+  let eliminateQuota = 0
+  /**
    * 环形调试日志：玩法分支（分裂/对消/暂停/挂机）的关键决策都记一笔。
    * 排「为什么没触发」这种问题时，靠它比反复插临时 console.log 强得多。
    * 通过 `api.debugLog()` 读，或 `api.debugLogClear()` 清空。
@@ -702,6 +766,8 @@ function createEngine(state) {
     fullSince = 0
     nextEliminateAt = 0
     splitPausedUntil = 0
+    eliminating = false
+    eliminateQuota = 0
   }
 
   function seed() {
@@ -768,8 +834,16 @@ function createEngine(state) {
    * 「同种」按 `src` 判定（同一张动图 = 同一种）。
    * @returns 消掉的只数（0 或 2）
    */
+  /**
+   * 同类对消（玩法）：消掉一对布偶。
+   *
+   * 优先消**同种**（同一张动图）里距离最近的一对；如果已经没有同种成对的了
+   * （比如最后剩两只不同款），就退而消距离最近的**任意两只** ——
+   * 这样「到达上限后全部消掉」才做得完（踩过：只认同种的话会卡在最后 1~2 只出不去）。
+   * @returns 消掉的只数（0 或 2）
+   */
   function tryEliminate() {
-    const P = state.physics
+    if (pets.length < 2) return 0
     const byKind = {}
     for (const pet of pets) {
       if (pet.dragging) continue                    // 手上拖着的那只不消，免得突然消失
@@ -777,10 +851,9 @@ function createEngine(state) {
       if (!byKind[kind]) byKind[kind] = []
       byKind[kind].push(pet)
     }
-    for (const kind of Object.keys(byKind)) {
-      const group = byKind[kind]
-      if (group.length < 2) continue
-      // 挑距离最近的一对，看着最像"碰在一起消掉了"
+    /** 从组里挑距离最近的一对。 */
+    const closestPair = (group) => {
+      if (group.length < 2) return null
       let best = null
       let bestD = Infinity
       for (let i = 0; i < group.length; i++) {
@@ -791,11 +864,22 @@ function createEngine(state) {
           if (d < bestD) { bestD = d; best = [group[i], group[j]] }
         }
       }
+      return best
+    }
+    // ① 先找同种
+    for (const kind of Object.keys(byKind)) {
+      const best = closestPair(byKind[kind])
       if (!best) continue
       for (const pet of best) eliminate(pet)
       return 2
     }
-    return 0
+    // ② 没有同种成对 → 消任意最近的两只（保证配额能走完）
+    const free = pets.filter((p) => !p.dragging)
+    const fallback = closestPair(free)
+    if (!fallback) return 0
+    pushLog('eliminate-mixed', { n: pets.length })
+    for (const pet of fallback) eliminate(pet)
+    return 2
   }
 
   /** 消掉一只：留个"噗"的渐隐克隆再摘掉 DOM。 */
@@ -928,30 +1012,44 @@ function createEngine(state) {
       render(pet)
     }
 
-    // 满员计时 + 同类对消（玩法）：满了 eliminateDelay 秒之后，每 eliminateInterval 秒消一对同种
-    if (pets.length >= P.maxPets) {
-      if (!fullSince) {
-        fullSince = simTime
-        nextEliminateAt = simTime + P.eliminateDelay * 1000
-        // 一到上限就停分裂：停 P.splitPause 秒（默认 2 分钟）
-        splitPausedUntil = simTime + P.splitPause * 1000
-        pushLog('cap-reached', { n: pets.length, pauseS: P.splitPause, delayS: P.eliminateDelay })
+    // ── 满员 → 进入对消模式 → 把这一波消干净 ──────────────────────────
+    // 到达上限：停分裂 + 开对消模式（两个状态互相独立）
+    if (!eliminating && pets.length >= P.maxPets) {
+      eliminating = true
+      fullSince = simTime
+      nextEliminateAt = simTime + P.eliminateDelay * 1000
+      splitPausedUntil = simTime + P.splitPause * 1000
+      /*
+       * 这一波要消几对 = floor(当前只数 / 2)。
+       *
+       * ⚠️ 不能写成「消到 0 只为止」：最后剩两只时**可能不是同种**，那就永远消不掉，
+       *    而 `tryEliminate` 会每 200ms 空转一次 —— 表现是卡在 2 只出不去（实测踩到）。
+       *    按启动时的只数算好配额，消够了就退出，剩下的（0 或 1 只）交给分裂继续玩。
+       */
+      eliminateQuota = Math.floor(pets.length / 2)
+      pushLog('cap-reached', {
+        n: pets.length, pauseS: P.splitPause, delayS: P.eliminateDelay, quota: eliminateQuota,
+      })
+    }
+    // 对消模式里：每 eliminateInterval 秒消一对，消够配额（或确实没得消了）就退出
+    if (eliminating) {
+      if (eliminateQuota <= 0 || pets.length === 0) {
+        eliminating = false
+        fullSince = 0
+        nextEliminateAt = 0
+        splitPausedUntil = 0
+        pushLog('eliminate-done', { n: pets.length })
       } else if (simTime >= nextEliminateAt) {
         if (tryEliminate() > 0) {
-          pushLog('eliminate', { n: pets.length })
-          // 空出名额了；下次对消再过 eliminateInterval 秒
+          eliminateQuota -= 1
+          pushLog('eliminate', { n: pets.length, left: eliminateQuota })
           nextEliminateAt = simTime + P.eliminateInterval * 1000
         } else {
-          pushLog('eliminate-skip', { n: pets.length, nextIn: 200 })
-          // 没有同类可消：退一步继续等，别每帧都算一遍
-          nextEliminateAt = simTime + 200
+          // 没有同种可消了（比如剩下的两只不是一款）：配额清零、直接退出，别空转
+          eliminateQuota = 0
+          pushLog('eliminate-skip', { n: pets.length })
         }
       }
-    } else {
-      fullSince = 0
-      nextEliminateAt = 0
-      // 掉到上限以下（对消掉过）就把暂停一并解除：不然会一直锁着
-      splitPausedUntil = 0
     }
 
     if (simTime - saveAt > 1500) {
@@ -1123,7 +1221,7 @@ function createEngine(state) {
 
 const FIELDS = [
   ['maxPets', '数量上限', 1, 30, 1, '个'],
-  ['seedCount', '清零后回到', 0, 10, 1, '个'],
+  ['seedCount', '清零后回到（0=启动不放）', 0, 10, 1, '个'],
   ['gravity', '重力', 0, 4000, 50, 'px/s²'],
   ['bounce', '落地反弹', 0, 1, 0.02, ''],
   ['wallBounce', '撞墙反弹', 0, 1, 0.02, ''],
@@ -1143,7 +1241,7 @@ const FIELDS = [
 /** 布尔型设置（勾选框）。 */
 const BOOL_FIELDS = [
   ['wallpaper', '显示壁纸', true],
-  ['autoGen', '自动生成壁纸', true],
+  ['autoGen', '自动生成（壁纸/布偶）', true],
 ]
 
 /** 字符串型设置（下拉框）。 */
@@ -1346,6 +1444,21 @@ function buildPanel(state, api) {
       },
       get: () => Number(numInput.value),
     }
+  }
+
+  // 数量区的说明：把「清零后回到 = 0」的后果写清楚，别让人以为是插件坏了
+  const countNote = doc.createElement('p')
+  countNote.className = 'dshww-note'
+  panel.appendChild(countNote)
+  const refreshCountNote = () => {
+    const seed = Number(inputs.seedCount ? inputs.seedCount.get() : state.physics.seedCount)
+    countNote.textContent = seed > 0
+      ? `启动时放 ${seed} 只`
+      : '清零后回到 = 0 → 启动不放布偶（想恢复就把它调大）'
+  }
+  refreshCountNote()
+  if (inputs.seedCount) {
+    inputs.seedCount.set = ((orig) => function (v) { orig.call(this, v); refreshCountNote() })(inputs.seedCount.set)
   }
 
   const status = doc.createElement('p')
@@ -1982,6 +2095,31 @@ function reportDiag(base) {
               out.svgShape = { fill: sc.fill, fillOpacity: sc.fillOpacity, stroke: sc.stroke }
             }
             out.popOpen = !!root.querySelector('.dshwv-pop-open')
+            /**
+             * 遮挡检查：我的玩偶层 z-index 是 2147482000，挂件只有 9999 ——
+             * 玩偶飘到挂件上方时会把余额盖住。这里算出哪些玩偶的矩形和小鲸鱼相交。
+             */
+            try {
+              const petsEl = doc.getElementById(PETS_ID)
+              if (petsEl) {
+                const hit = []
+                for (const el of petsEl.children) {
+                  const b = el.getBoundingClientRect()
+                  if (b.width <= 0 || b.height <= 0) continue
+                  const overlap = !(b.right < r.left || b.left > r.right || b.bottom < r.top || b.top > r.bottom)
+                  if (!overlap) continue
+                  const im = el.querySelector ? el.querySelector('.dshww-anim') : null
+                  hit.push({
+                    src: String(im && im.getAttribute ? im.getAttribute('src') : ''),
+                    rect: [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)],
+                  })
+                }
+                out.overlappingPets = hit
+                out.petsZ = String((csOf(petsEl) || {}).zIndex)
+                out.widgetZ = String((csOf(root) || {}).zIndex)
+                out.petsCoverWidget = hit.length > 0
+              }
+            } catch (err) { out.overlapError = String((err && err.message) || err) }
             out.gifHidden = (() => {
               const g = root.querySelector('.dshwv-gif')
               if (!g) return 'no-gif'
