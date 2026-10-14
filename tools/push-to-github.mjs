@@ -25,7 +25,7 @@ if (!payloadPath) {
   console.error('用法: node push-to-github.mjs <payload.json>')
   process.exit(1)
 }
-const { repo, branch = 'main', message, files } = JSON.parse(fs.readFileSync(payloadPath, 'utf8'))
+const { repo, branch = 'main', message, files, prune = false } = JSON.parse(fs.readFileSync(payloadPath, 'utf8'))
 
 const headers = {
   Authorization: `Bearer ${TOKEN}`,
@@ -128,8 +128,32 @@ for (const f of files) {
   console.log(`  [${done}/${files.length}] ${f.path}  (${kb} KB)`)
 }
 
-// ── 3. 建树（base_tree 让没提到的文件保留）───────────────────────────
-const newTree = await api('POST', `/repos/${repo}/git/trees`, baseTree ? { base_tree: baseTree, tree } : { tree })
+// ── 3. 建树（base_tree 让没提到的文件保留；prune 时删掉远程多余的）────
+//
+// ⚠️ `base_tree` 会把「本地没有、远程有」的文件一起保留 ——
+//    所以本地删了文件、光靠它推是删不掉的（踩过：把测试临时文件推上去了，没法回收）。
+//    payload 里带 `prune: true` 时会读一次远程树，把远程有、本地没有的路径显式标成删除。
+let treeInput = tree
+if (prune && baseTree) {
+  const remoteTree = await api('GET', `/repos/${repo}/git/trees/${baseTree}?recursive=1`)
+  if (remoteTree.ok && Array.isArray(remoteTree.json.tree)) {
+    const localPaths = new Set(files.map((f) => f.path))
+    const orphans = remoteTree.json.tree
+      .filter((x) => x.type === 'blob' && !localPaths.has(x.path))
+      .map((x) => x.path)
+    if (orphans.length) {
+      console.log(`\n删除远程多余文件 ${orphans.length} 个：`)
+      for (const p of orphans) console.log(`  - ${p}`)
+      // sha: null 表示删除该路径
+      treeInput = tree.concat(orphans.map((p) => ({ path: p, mode: '100644', type: 'blob', sha: null })))
+    } else {
+      console.log('\n远程没有多余文件')
+    }
+  }
+}
+
+const newTree = await api('POST', `/repos/${repo}/git/trees`,
+  baseTree ? { base_tree: baseTree, tree: treeInput } : { tree: treeInput })
 if (!newTree.ok) {
   console.error(`建树失败: HTTP ${newTree.status} ${newTree.text.slice(0, 300)}`)
   process.exit(1)

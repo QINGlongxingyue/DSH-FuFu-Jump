@@ -4,3 +4,14 @@ pnpm-lock.yaml
 *.log
 .DS_Store
 Thumbs.db
+
+# 测试/调试产生的临时 HOME（smoke-host.mjs 会往这里写设置和日志）
+tools/probe/home/
+.dshw-wallpaper-settings.json
+.dshw-wallpaper-client.log
+
+# 验证脚本下载的临时副本
+tools/probe/downloaded/
+tools/probe/whale-sel/
+tools/probe/pack/
+
