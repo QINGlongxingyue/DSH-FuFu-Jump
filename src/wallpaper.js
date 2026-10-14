@@ -70,6 +70,7 @@ function clearTextSelection() {
 /** 前端兜底默认值（宿主 PHYSICS_DEFAULTS 有一份一样的）。 */
 const PHYSICS_FALLBACK = {
   wallpaper: true,      // 壁纸开关（在设置面板里切）
+  autoGen: true,        // false = 不显示自带那张默认壁纸（自定义壁纸/配置指定的照常显示）
   uiClearLevel: 3,      // 界面通透档位：0 不动 / 1 只透大面板 / 2 连小块 / 3 全透
   maxPets: 10,
   seedCount: 2,
@@ -480,6 +481,7 @@ function merge(user) {
 function resolvePhysics(raw) {
   const p = Object.assign({}, PHYSICS_FALLBACK, raw && typeof raw === 'object' ? raw : {})
   p.wallpaper = p.wallpaper !== false
+  p.autoGen = p.autoGen !== false
   p.uiClearLevel = Math.max(0, Math.min(3, Math.round(Number(p.uiClearLevel) || 0)))
   p.maxPets = Math.max(1, Math.round(p.maxPets))
   p.seedCount = Math.max(0, Math.min(p.maxPets, Math.round(p.seedCount)))
@@ -514,6 +516,45 @@ function writeSaved(map) {
   try {
     if (globalThis.localStorage) globalThis.localStorage.setItem(POS_KEY, JSON.stringify(map))
   } catch (err) {}
+}
+
+/* ---------------------------------------------------------- 自定义壁纸存储 */
+
+/** 自定义壁纸存在 localStorage（data URL），只对本机本浏览器有效。 */
+const CUSTOM_WALLPAPER_KEY = 'dshww-custom-wallpaper'
+
+function readCustomWallpaper() {
+  try {
+    const v = globalThis.localStorage && globalThis.localStorage.getItem(CUSTOM_WALLPAPER_KEY)
+    return typeof v === 'string' && v.startsWith('data:image/') ? v : ''
+  } catch (err) { return '' }
+}
+
+function writeCustomWallpaper(dataUrl) {
+  try {
+    if (!globalThis.localStorage) return false
+    if (dataUrl) globalThis.localStorage.setItem(CUSTOM_WALLPAPER_KEY, dataUrl)
+    else globalThis.localStorage.removeItem(CUSTOM_WALLPAPER_KEY)
+    return true
+  } catch (err) {
+    // 配额炸了（图太大）就说清楚，别静默失败
+    throw new Error('壁纸存不下了（浏览器本地存储有配额，换张小点的图）')
+  }
+}
+
+/**
+ * 「关闭自动生成」：**不显示自带的那张默认壁纸**。
+ *
+ * 两种例外照常显示：
+ *  ① 本地选了自定义壁纸（data URL）—— 那是你自己给的，不算"自动生成"
+ *  ② `cordis.patch.yml` 里把 `wallpaper:` 改成了非默认路径 —— 那也算你指定的
+ * 默认的那张（`/dsh-whale-wallpaper/wallpaper`）就是这个开关要关掉的东西。
+ */
+const DEFAULT_WALLPAPER_PATH = '/dsh-whale-wallpaper/wallpaper'
+
+/** 这个壁纸是不是「自动生成/自带」的那张。 */
+function isAutoWallpaper(wallpaperUrl) {
+  return String(wallpaperUrl || '') === DEFAULT_WALLPAPER_PATH
 }
 
 /* ---------------------------------------------------------------- 物理 */
@@ -1073,6 +1114,7 @@ const FIELDS = [
 /** 布尔型设置（勾选框）。 */
 const BOOL_FIELDS = [
   ['wallpaper', '显示壁纸', true],
+  ['autoGen', '自动生成壁纸', true],
 ]
 
 /** 界面通透档位（下拉框）。 */
@@ -1152,6 +1194,69 @@ function buildPanel(state, api) {
     panel.appendChild(row)
     levelRows[key] = sel
   }
+
+  // —— 壁纸：自定义图片 + 关闭自动生成 ——
+  const groupWall = doc.createElement('div')
+  groupWall.className = 'dshww-group'
+  groupWall.textContent = '壁纸'
+  panel.appendChild(groupWall)
+
+  const wallRow = doc.createElement('div')
+  wallRow.className = 'dshww-field'
+  const wallLab = doc.createElement('label')
+  wallLab.textContent = '自定义壁纸'
+  const fileInput = doc.createElement('input')
+  fileInput.type = 'file'
+  fileInput.accept = 'image/png,image/jpeg,image/webp,image/gif'
+  const pickBtn = doc.createElement('button')
+  pickBtn.type = 'button'
+  pickBtn.className = 'dshww-btn'
+  pickBtn.textContent = '选择图片'
+  pickBtn.addEventListener('click', () => { try { fileInput.click() } catch (err) {} })
+  const clearWallBtn = doc.createElement('button')
+  clearWallBtn.type = 'button'
+  clearWallBtn.className = 'dshww-btn'
+  clearWallBtn.textContent = '清除'
+  wallRow.appendChild(wallLab)
+  wallRow.appendChild(pickBtn)
+  wallRow.appendChild(clearWallBtn)
+  wallRow.appendChild(fileInput)
+  panel.appendChild(wallRow)
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files[0]
+    if (!file) return
+    if (!/^image\//.test(String(file.type || ''))) {
+      status.textContent = '这不是图片文件'
+      return
+    }
+    // data URL 要塞进 localStorage，太大就会爆配额：给个上限并说清楚
+    const MAX = 4 * 1024 * 1024
+    if (file.size > MAX) {
+      status.textContent = `图太大了（${(file.size / 1048576).toFixed(1)} MB），上限 4 MB`
+      return
+    }
+    const reader = new globalThis.FileReader()
+    reader.onload = () => {
+      try {
+        api.applyCustomWallpaper(String(reader.result || ''))
+        status.textContent = '自定义壁纸已应用（存在本机浏览器里）'
+      } catch (err) {
+        status.textContent = String((err && err.message) || err)
+      }
+    }
+    reader.onerror = () => { status.textContent = '读文件失败' }
+    reader.readAsDataURL(file)
+  })
+
+  clearWallBtn.addEventListener('click', () => {
+    try {
+      api.applyCustomWallpaper('')
+      status.textContent = '已清除自定义壁纸，回到默认那张'
+    } catch (err) {
+      status.textContent = String((err && err.message) || err)
+    }
+  })
 
   const groupCount = doc.createElement('div')
   groupCount.className = 'dshww-group'
@@ -1248,6 +1353,16 @@ function buildPanel(state, api) {
     box.addEventListener('change', () => {
       api.applyWallpaper(box.checked)      // 用勾选框当前值，别用 state 里那份（可能还没更新）
       status.textContent = box.checked ? '壁纸已开（点保存落盘）' : '壁纸已关（点保存落盘）'
+    })
+  }
+
+  // 关闭自动生成：立刻把自带那张默认壁纸撤掉（自定义壁纸和配置指定的壁纸不受影响）
+  if (boolRows.autoGen) {
+    const box = boolRows.autoGen
+    box.addEventListener('change', () => {
+      state.physics.autoGen = box.checked
+      api.applyAutoGen(box.checked)
+      status.textContent = box.checked ? '自动壁纸已开（点保存落盘）' : '自动壁纸已关（点保存落盘）'
     })
   }
 
@@ -1403,7 +1518,17 @@ function mount(config) {
     veil.style.background = String(config.veil)
     layer.appendChild(veil)
   }
-  parent.appendChild(layer)
+  // ⚠️ canvasState 必须在挂壁纸层之前就建好：后面要用它判断"有没有自定义壁纸"
+  const canvasState = { on: config.physics ? config.physics.wallpaper !== false : true }
+  canvasState.custom = readCustomWallpaper()
+  // 本地有自定义壁纸就直接用它（优先级高于配置里那张）
+  if (canvasState.custom) {
+    try { wallpaperImg.src = canvasState.custom } catch (err) {}
+  }
+  // 「关闭自动生成」：不显示自带那张默认壁纸
+  const autoGenOn = !config.physics || config.physics.autoGen !== false
+  const hideAuto = !autoGenOn && isAutoWallpaper(canvasUrl) && !canvasState.custom
+  if (!hideAuto) parent.appendChild(layer)
 
   if (config.pets === false || !config.characters.length) return
 
@@ -1421,7 +1546,6 @@ function mount(config) {
     countEl: null,
   }
   // 引擎读的是 state.config.physics，这里绑成同一个对象，设置面板一改两边都变
-  const canvasState = { on: config.physics ? config.physics.wallpaper !== false : true }
   config.physics = state.physics
 
   const bar = doc.createElement('div')
@@ -1455,6 +1579,34 @@ function mount(config) {
     } catch (err) {}
   }
 
+  /** 界面通透档位 CSS —— 单独一个 <style>，档位/自动生成一改就重写它。 */
+  /** 「关闭自动生成」= 不显示自带那张默认壁纸（自定义壁纸和配置指定的照常显示）。 */
+  const applyAutoGen = (on) => {
+    try {
+      const disable = on === false
+      const hideAuto = disable && isAutoWallpaper(canvasUrl) && !canvasState.custom
+      if (hideAuto) {
+        if (doc.body && layer.parentNode === doc.body) doc.body.removeChild(layer)
+      } else if (!layer.parentNode) {
+        // 取消关闭时把壁纸层挂回去（放在 body 末尾，和初次挂载时一致）
+        ;(doc.body || doc.documentElement).appendChild(layer)
+      }
+      // 挂件层也别被移除逻辑带跑：它本来就在 body 里，不参与
+    } catch (err) {}
+  }
+
+  /** 自定义壁纸：空字符串 = 用默认那张。存 localStorage（本机、本浏览器）。 */
+  const applyCustomWallpaper = (dataUrl) => {
+    canvasState.custom = dataUrl || ''
+    try {
+      if (canvasState.custom) wallpaperImg.src = canvasState.custom
+      else wallpaperImg.src = canvasUrl
+    } catch (err) {}
+    try { writeCustomWallpaper(canvasState.custom) } catch (err) { warn(err) }
+    applyAutoGen(state.physics.autoGen)
+  }
+  canvasState.custom = readCustomWallpaper()
+
   // 物理参数以宿主侧文件为准：注入行里那份是启动时的快照，这里补一次最新值。
   const pullSettings = async () => {
     try {
@@ -1467,6 +1619,7 @@ function mount(config) {
         for (const pet of engine.pets) pet.sp = state.physics
         engine.updateCount()
         applyWallpaper(state.physics.wallpaper)
+        applyAutoGen(state.physics.autoGen)
         api.refreshTransparency()
       }
     } catch (err) { /* 拿不到就用注入的那份 */ }
@@ -1504,6 +1657,10 @@ function mount(config) {
     applyPhysics: () => engine.updateCount(),
     /** 壁纸开关（设置面板里的勾选框）。 */
     applyWallpaper,
+    /** 「关闭自动生成」= 不显示自带那张默认壁纸。 */
+    applyAutoGen,
+    /** 自定义壁纸（data URL；空字符串 = 回默认）。 */
+    applyCustomWallpaper,
     /** 界面重渲染后重新清一遍「糊住壁纸」的底色（MutationObserver 会一直叫它）。 */
     refreshTransparency: () => {
       if (state.config.transparentUI) {
@@ -1518,6 +1675,11 @@ function mount(config) {
     },
     /** 给自检/调试用：拿到内部挂件列表（每个对象含 x/y/vx/vy/w/h 与 DOM 节点）。 */
     debugPets: () => engine.pets,
+    /**
+     * 给自检用：**活引用**（`debugPets()` 返回的是快照，`debugReset()` 之后会变成孤儿）。
+     * 要反复读写挂件状态就用这个，别缓存。
+     */
+    debugPetsLive: () => engine.pets,
     /** 给自检用：手动推进一帧物理（dt 秒）。 */
     debugStep: (dt) => engine.integrate(dt),
     /** 给自检用：挂机奖励的状态对象（含 step(now)，可以直接喂时间戳测）。 */
