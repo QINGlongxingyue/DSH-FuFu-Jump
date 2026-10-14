@@ -1,0 +1,9 @@
+2026-10-14T02:12:52.120Z ===== 宿主启动，等待页面回传（最多等 15 秒）=====
+2026-10-14T02:12:52.256Z ===== 页面自检 tag=client-mounted =====
+  href: "http://127.0.0.1:1/?token=x"
+  viewport: [1600,900]
+  canvas 变量: {"image":"url(\"/dsh-whale-wallpaper/wallpaper\")","size":"cover","filter":"none"}
+  算出来的样式:
+    bodyBg: rgba(0, 0, 0, 0) | url(...)
+  各层几何:
+    {"el":"#root","rect":[0,0,1600,900],"z":"auto","bgColor":"transparent"}

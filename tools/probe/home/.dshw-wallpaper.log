@@ -1,0 +1,13 @@
+2026-10-14T02:12:52.122Z apply() 开始；包目录=C:\Users\Starfarer\Desktop\game\DSHsudio\fufu-jump-DSH；pets=true；角色=2；bundles 里能看到我说明这行加载成功了
+2026-10-14T02:12:52.123Z assets 存在=true；client.js 长度=74880
+2026-10-14T02:12:52.123Z index 注入行已注册（webserver/index-inject）
+2026-10-14T02:12:52.125Z 壁纸路由已注册
+2026-10-14T02:12:52.125Z 挂件路由已注册：whale-dance-1.webp
+2026-10-14T02:12:52.126Z 挂件路由已注册：whale-dance-2.gif
+2026-10-14T02:12:52.126Z 路由全部就绪
+2026-10-14T02:12:52.126Z 已用 root.inject([webServer]) 等待服务
+2026-10-14T02:12:52.253Z 设置已保存 -> C:\Users\Starfarer\Desktop\game\DSHsudio\fufu-jump-DSH\tools\probe\home\.dshw-wallpaper-settings.json
+2026-10-14T02:12:52.254Z 设置已重置为默认值 -> C:\Users\Starfarer\Desktop\game\DSHsudio\fufu-jump-DSH\tools\probe\home\.dshw-wallpaper-settings.json
+2026-10-14T02:12:52.255Z 设置已保存 -> C:\Users\Starfarer\Desktop\game\DSHsudio\fufu-jump-DSH\tools\probe\home\.dshw-wallpaper-settings.json
+2026-10-14T02:12:52.256Z 设置已重置为默认值 -> C:\Users\Starfarer\Desktop\game\DSHsudio\fufu-jump-DSH\tools\probe\home\.dshw-wallpaper-settings.json
+2026-10-14T02:12:52.257Z 插件已卸载，路由已释放

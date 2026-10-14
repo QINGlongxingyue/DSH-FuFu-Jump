@@ -143,9 +143,29 @@ lib/client.js         Client 半侧：esbuild 打包产物（由 src/ 生成，�
 src/                  页面侧源码
 assets/               壁纸 + 两只鲸鱼娘的动图
 docs/                 安装验证记录、素材转换流程
+tools/                推送脚本 + 冒烟测试 + 验证脚本（见下）
 ```
 
 素材默认使用 **WebP**（体积小、支持透明）。想换 GIF，改 `cordis.patch.yml` 里对应角色的 `src:` 即可。
+
+### tools 里有什么
+
+| 脚本 | 用途 |
+|---|---|
+| `smoke-client.mjs` | 页面半侧冒烟测试（20+ 条断言：物理、分裂、对消、挂机、拖动、设置面板、弹窗保护…） |
+| `smoke-host.mjs` | 宿主半侧冒烟测试（路由、注入行去重、路径穿越、设置读写与夹取） |
+| `push-to-github.ps1` / `.mjs` | 不依赖 git 的推送（走 GitHub REST API） |
+| `probe/verify-remote.mjs` | 逐个文件比对远程仓库与本地 |
+| `probe/remote-fresh.mjs` | 远程新鲜度全面自检 + 产物关键点检查 |
+| `probe/build-whale-probe.mjs` | 生成小鲸鱼 DOM 复刻页，用真浏览器验证 CSS 选择器是否命中 |
+| `probe/gh-auth-check.mjs` | 验证 `~/.git-credentials` 里的 token 与仓库权限 |
+
+跑冒烟测试（需要先 `npm install` 拿到 esbuild）：
+
+```bash
+node tools/smoke-client.mjs lib/client.js
+node tools/smoke-host.mjs lib/index.js
+```
 
 ---
 
