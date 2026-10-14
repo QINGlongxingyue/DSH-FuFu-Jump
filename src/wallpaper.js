@@ -72,6 +72,7 @@ const PHYSICS_FALLBACK = {
   wallpaper: true,      // 壁纸开关（在设置面板里切）
   autoGen: true,        // false = 不显示自带那张默认壁纸（自定义壁纸/配置指定的照常显示）
   uiClearLevel: 3,      // 界面通透档位：0 不动 / 1 只透大面板 / 2 连小块 / 3 全透
+  whaleBubble: 'translucent', // 小鲸鱼余额气泡：opaque 原样 / translucent 半透明 / clear 全透
   maxPets: 10,
   seedCount: 2,
   gravity: 1400,
@@ -139,24 +140,45 @@ html, body { background-color: transparent !important; }
 [data-dshww-clear-bg="1"] { background-color: transparent !important; }
 /* 有些容器是「底色 + 一层渐变/图」叠出来的，只清底色还会剩一层白 */
 [data-dshww-clear-bgi="1"] { background-image: none !important; }
+`
 
-/* ---------------------------------------------------------------------------
- * 顺手把「小鲸鱼挂件」（另一个插件 dsh-whale-widget）的余额气泡也通透掉。
+/**
+ * 「小鲸鱼挂件」（另一个插件 dsh-whale-widget）余额气泡的处理。
  *
  * 它的白底**不在 CSS 里** —— 气泡是 SVG 画的，标记写死了：
  *   <path class="dshwv-bshape" fill="#FFFFFF" stroke="#203170" .../>
  *   <ellipse class="dshwv-b1" ... fill="#FFFFFF" .../>
  *   <ellipse class="dshwv-b2" ... fill="#FFFFFF" .../>
- * SVG 的 fill 是**表现属性**，优先级最低，所以 CSS 能压过它（必须带 !important）。
- * 描边留着：不然半透明底上那行深色余额数字没有边界，看着发飘。
- * --------------------------------------------------------------------------- */
-#dsh-whale-widget .dshwv-bshape,
+ * SVG 的 `fill` 是**表现属性**（优先级最低），所以 CSS 能压过它（必须带 `!important`）。
+ *
+ * ⚠️ 别直接把 fill 设成全透明：余额数字是 `#536ba9`（中蓝）、说明文字 `#9fb0d9`（浅蓝），
+ *    失去白底后糊在草地/天空上根本看不清 —— 踩过，用户反馈「小鲸鱼看不见余额了」。
+ *    所以做成三档，默认给一层半透明白：壁纸透得进来，字也压得住。
+ *
+ * 档位对应 `whaleBubble` 设置：opaque 原样 / translucent 半透明（默认）/ clear 全透。
+ */
+function whaleBubbleCss(mode) {
+  const m = String(mode || 'translucent')
+  if (m === 'opaque') return ''
+  const fill = m === 'clear' ? 'transparent' : 'rgba(255, 255, 255, .78)'
+  const alpha = m === 'clear' ? '0' : '1'
+  // 全透档要给文字加白描边+阴影，不然深蓝字压在任何背景上都发飘
+  const textGuard = m === 'clear'
+    ? `
+#dsh-whale-widget .dshwv-text,
+#dsh-whale-widget .dshwv-text * {
+  -webkit-text-stroke: .6px rgba(255, 255, 255, .95) !important;
+  text-shadow: 0 1px 3px rgba(255, 255, 255, .95), 0 0 6px rgba(255, 255, 255, .7) !important;
+}`
+    : ''
+  return `#dsh-whale-widget .dshwv-bshape,
 #dsh-whale-widget .dshwv-b1,
 #dsh-whale-widget .dshwv-b2 {
-  fill: transparent !important;
-  fill-opacity: 0 !important;
+  fill: ${fill} !important;
+  fill-opacity: ${alpha} !important;
 }
-`
+${textGuard}`
+}
 
 /**
  * 常驻监听：外壳/主题是**异步上色**的，挂载那一刻各面板往往还没底色，
@@ -482,6 +504,7 @@ function resolvePhysics(raw) {
   const p = Object.assign({}, PHYSICS_FALLBACK, raw && typeof raw === 'object' ? raw : {})
   p.wallpaper = p.wallpaper !== false
   p.autoGen = p.autoGen !== false
+  if (!['opaque', 'translucent', 'clear'].includes(p.whaleBubble)) p.whaleBubble = 'translucent'
   p.uiClearLevel = Math.max(0, Math.min(3, Math.round(Number(p.uiClearLevel) || 0)))
   p.maxPets = Math.max(1, Math.round(p.maxPets))
   p.seedCount = Math.max(0, Math.min(p.maxPets, Math.round(p.seedCount)))
@@ -1117,6 +1140,15 @@ const BOOL_FIELDS = [
   ['autoGen', '自动生成壁纸', true],
 ]
 
+/** 字符串型设置（下拉框）。 */
+const SELECT_FIELDS = [
+  ['whaleBubble', '小鲸鱼余额气泡', 'translucent', [
+    ['translucent', '半透明底（默认，字看得清）'],
+    ['clear', '全透（字加白描边）'],
+    ['opaque', '原样不处理'],
+  ]],
+]
+
 /** 界面通透档位（下拉框）。 */
 const LEVEL_FIELDS = [
   ['uiClearLevel', '界面通透', 3, [
@@ -1174,9 +1206,9 @@ function buildPanel(state, api) {
     boolRows[key] = cb
   }
 
-  // 界面通透档位（下拉框）：改完立刻重扫一遍
-  const levelRows = {}
-  for (const [key, label, def, options] of LEVEL_FIELDS) {
+  // 下拉框类设置（界面通透档位、小鲸鱼余额气泡档位）
+  const selectRows = {}
+  for (const [key, label, def, options] of [...LEVEL_FIELDS, ...SELECT_FIELDS]) {
     const row = doc.createElement('div')
     row.className = 'dshww-field'
     const lab = doc.createElement('label')
@@ -1192,8 +1224,9 @@ function buildPanel(state, api) {
     row.appendChild(lab)
     row.appendChild(sel)
     panel.appendChild(row)
-    levelRows[key] = sel
+    selectRows[key] = sel
   }
+  const levelRows = selectRows
 
   // —— 壁纸：自定义图片 + 关闭自动生成 ——
   const groupWall = doc.createElement('div')
@@ -1347,6 +1380,16 @@ function buildPanel(state, api) {
     })
   }
 
+  // 小鲸鱼余额气泡档位：换一档立刻生效
+  if (levelRows.whaleBubble) {
+    const sel = levelRows.whaleBubble
+    sel.addEventListener('change', () => {
+      state.physics.whaleBubble = String(sel.value)
+      api.applyWhaleBubble(sel.value)
+      status.textContent = `小鲸鱼气泡 = ${sel.value}（已立即生效，点保存落盘）`
+    })
+  }
+
   // 壁纸开关：勾/去勾立刻看到效果（保存才落盘）
   if (boolRows.wallpaper) {
     const box = boolRows.wallpaper
@@ -1370,7 +1413,10 @@ function buildPanel(state, api) {
     const physics = {}
     for (const key of Object.keys(inputs)) physics[key] = inputs[key].get()
     for (const key of Object.keys(boolRows)) physics[key] = boolRows[key].checked
-    for (const key of Object.keys(levelRows)) physics[key] = Number(levelRows[key].value)
+    for (const key of Object.keys(levelRows)) {
+      // uiClearLevel 是数字，其余下拉（如 whaleBubble）是字符串
+      physics[key] = key === 'uiClearLevel' ? Number(levelRows[key].value) : String(levelRows[key].value)
+    }
     status.textContent = '正在保存…'
     const res = await api.save(physics)
     if (res && res.ok) {
@@ -1595,6 +1641,25 @@ function mount(config) {
     } catch (err) {}
   }
 
+  /** 小鲸鱼余额气泡档位：单独一个 <style>，改档立刻重写。 */
+  const whaleCssId = UI_TRANSPARENT_STYLE_ID + '-whale'
+  const applyWhaleBubble = (mode) => {
+    try {
+      const css = whaleBubbleCss(mode)
+      let el = doc.getElementById(whaleCssId)
+      if (!css) {
+        if (el && el.parentNode) el.parentNode.removeChild(el)
+        return
+      }
+      if (!el) {
+        el = doc.createElement('style')
+        el.id = whaleCssId
+        ;(doc.head || doc.documentElement).appendChild(el)
+      }
+      el.textContent = css
+    } catch (err) {}
+  }
+
   /** 自定义壁纸：空字符串 = 用默认那张。存 localStorage（本机、本浏览器）。 */
   const applyCustomWallpaper = (dataUrl) => {
     canvasState.custom = dataUrl || ''
@@ -1606,6 +1671,8 @@ function mount(config) {
     applyAutoGen(state.physics.autoGen)
   }
   canvasState.custom = readCustomWallpaper()
+  // 小鲸鱼余额气泡档位（覆盖另一个插件 SVG 的 fill）
+  applyWhaleBubble(state.physics.whaleBubble)
 
   // 物理参数以宿主侧文件为准：注入行里那份是启动时的快照，这里补一次最新值。
   const pullSettings = async () => {
@@ -1620,6 +1687,7 @@ function mount(config) {
         engine.updateCount()
         applyWallpaper(state.physics.wallpaper)
         applyAutoGen(state.physics.autoGen)
+        applyWhaleBubble(state.physics.whaleBubble)
         api.refreshTransparency()
       }
     } catch (err) { /* 拿不到就用注入的那份 */ }
@@ -1659,6 +1727,8 @@ function mount(config) {
     applyWallpaper,
     /** 「关闭自动生成」= 不显示自带那张默认壁纸。 */
     applyAutoGen,
+    /** 小鲸鱼余额气泡档位：opaque / translucent / clear。 */
+    applyWhaleBubble,
     /** 自定义壁纸（data URL；空字符串 = 回默认）。 */
     applyCustomWallpaper,
     /** 界面重渲染后重新清一遍「糊住壁纸」的底色（MutationObserver 会一直叫它）。 */
