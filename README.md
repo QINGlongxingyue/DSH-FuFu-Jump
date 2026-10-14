@@ -49,6 +49,17 @@ SVG 的 `fill` 是**表现属性**（优先级最低），所以本插件用 CSS
 | 全透 | `fill: transparent`，同时给文字加白描边 + 白阴影 |
 | 原样不处理 | 撤掉本插件的样式，回到它原本的白底 |
 
+```css
+.dshwv-root .dshwv-bshape,
+.dshwv-root .dshwv-b1,
+.dshwv-root .dshwv-b2 { fill: rgba(255,255,255,.78) !important; fill-opacity: 1 !important; }
+```
+
+> ⚠️ **选择器必须是 `.dshwv-root`，不能写 `#dsh-whale-widget`。**
+> `dsh-whale-widget` 只是它**样式表上的 `data-plugin` 属性值**
+> （`<style data-plugin="dsh-whale-widget">`），页面里没有这个 id ——
+> 写成 `#dsh-whale-widget …` 会一条都匹配不上、静默失效（这个坑踩过，白改了两轮）。
+>
 > ⚠️ **别默认用全透**：余额数字是 `#536ba9`（中蓝）、说明文字 `#9fb0d9`（浅蓝），
 > 失去白底后压在草地/天空上根本看不清（踩过：用户反馈「小鲸鱼看不见余额了」）。
 > 全透档必须配白描边才可用，代码里已经带上了。

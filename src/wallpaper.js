@@ -151,6 +151,12 @@ html, body { background-color: transparent !important; }
  *   <ellipse class="dshwv-b2" ... fill="#FFFFFF" .../>
  * SVG 的 `fill` 是**表现属性**（优先级最低），所以 CSS 能压过它（必须带 `!important`）。
  *
+ * ⚠️⚠️ 选择器必须用 `.dshwv-root`，**不能用 `#dsh-whale-widget`** ——
+ *    `dsh-whale-widget` 只是它**样式表上的 `data-plugin` 属性值**（`<style data-plugin="dsh-whale-widget">`），
+ *    页面里根本没有这个 id。用 `#dsh-whale-widget …` 会一条都匹配不上、静默失效 ——
+ *    这个错误让我白改了两轮（用户反馈「没用」，一查选择器压根没命中）。
+ *    挂件的根节点是 `class="dshwv-root"`。
+ *
  * ⚠️ 别直接把 fill 设成全透明：余额数字是 `#536ba9`（中蓝）、说明文字 `#9fb0d9`（浅蓝），
  *    失去白底后糊在草地/天空上根本看不清 —— 踩过，用户反馈「小鲸鱼看不见余额了」。
  *    所以做成三档，默认给一层半透明白：壁纸透得进来，字也压得住。
@@ -165,15 +171,15 @@ function whaleBubbleCss(mode) {
   // 全透档要给文字加白描边+阴影，不然深蓝字压在任何背景上都发飘
   const textGuard = m === 'clear'
     ? `
-#dsh-whale-widget .dshwv-text,
-#dsh-whale-widget .dshwv-text * {
+.dshwv-root .dshwv-text,
+.dshwv-root .dshwv-text * {
   -webkit-text-stroke: .6px rgba(255, 255, 255, .95) !important;
   text-shadow: 0 1px 3px rgba(255, 255, 255, .95), 0 0 6px rgba(255, 255, 255, .7) !important;
 }`
     : ''
-  return `#dsh-whale-widget .dshwv-bshape,
-#dsh-whale-widget .dshwv-b1,
-#dsh-whale-widget .dshwv-b2 {
+  return `.dshwv-root .dshwv-bshape,
+.dshwv-root .dshwv-b1,
+.dshwv-root .dshwv-b2 {
   fill: ${fill} !important;
   fill-opacity: ${alpha} !important;
 }
